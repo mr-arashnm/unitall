@@ -1,0 +1,2468 @@
+openapi: 3.1.0
+info:
+  title: Unital API
+  version: 1.0.0
+  description: |
+    Building & complex management platform. Consolidated gateway API for the
+    Unital Go microservices (identity, property, billing, facilities,
+    operations, notifications/communications).
+
+    **Auth**: `POST /auth/login` returns an access token (15 min) + refresh
+    token. Send `Authorization: Bearer <access>` on every other call.
+
+    **Errors**: all failures use RFC 9457 problem details with a
+    machine-readable `code` and `trace_id`.
+  contact: { name: Unital, url: https://unital.app }
+servers:
+  - url: http://localhost:8080/api/v1
+    description: local gateway
+  - url: http://localhost:18080/api/v1
+    description: local gateway (dev port)
+tags:
+  - { name: Auth, description: Registration, login, tokens, profile }
+  - { name: Memberships, description: Building roles & access }
+  - { name: Property, description: Buildings, units, assets, contracts }
+  - { name: Billing, description: Charges, payments, invoices, reports }
+  - { name: Notifications, description: Campaigns, templates, inbox }
+  - { name: Facilities, description: Amenities, bookings, maintenance }
+  - { name: Operations, description: Teams, tasks, service requests }
+  - { name: Comms, description: Announcements, meetings, support tickets }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+            example:
+              email: sara@example.com
+              password: secret12
+              full_name: سارا احمدی
+              phone: "09120000001"
+              role: owner
+      responses:
+        "201":
+          description: Account created (unverified — login requires /auth/verify)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email + password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Token pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke a refresh token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200": { description: Logged out }
+
+  /auth/verify:
+    post:
+      tags: [Auth]
+      summary: Verify account with emailed token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200": { description: Verified }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: My profile
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+    patch:
+      tags: [Auth]
+      summary: Update my profile
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string }
+                phone: { type: string }
+                national_code: { type: string }
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  /me/buildings:
+    get:
+      tags: [Memberships]
+      summary: Buildings I belong to (with my role)
+      responses:
+        "200":
+          description: Membership list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Membership" }
+
+  /buildings/{buildingID}/memberships:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    post:
+      tags: [Memberships]
+      summary: Grant a building role (manager only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, role]
+              properties:
+                user_id: { type: string }
+                role:
+                  type: string
+                  enum: [manager, board_member, staff, owner, resident]
+      responses:
+        "201":
+          description: Granted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Membership" }
+        "403": { $ref: "#/components/responses/Problem" }
+    get:
+      tags: [Memberships]
+      summary: List building memberships (members only)
+      responses:
+        "200":
+          description: Membership list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Membership" }
+
+  /buildings/{buildingID}/memberships/{membershipID}:
+    delete:
+      tags: [Memberships]
+      summary: Revoke a membership (manager only)
+      parameters:
+        - $ref: "#/components/parameters/BuildingID"
+        - name: membershipID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Revoked }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  # ---------------- Property ----------------
+
+  /buildings:
+    post:
+      tags: [Property]
+      summary: Create a building
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BuildingInput" }
+            example:
+              name: برج‌های یونیتال
+              code: TWR-1
+              type: residential
+              address: تهران، خیابان نمونه
+              floors: 10
+              features: [billing, notifications]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Building" }
+        "409": { $ref: "#/components/responses/Problem" }
+    get:
+      tags: [Property]
+      summary: List my buildings
+      responses:
+        "200":
+          description: Buildings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Building" }
+
+  /buildings/{buildingID}:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Property]
+      summary: Building detail
+      responses:
+        "200":
+          description: Building
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Building" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [Property]
+      summary: Update a building (manager/board)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BuildingInput" }
+      responses:
+        "200": { description: Updated building }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/units:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Property]
+      summary: List units (building members)
+      responses:
+        "200":
+          description: Units
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Unit" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [Property]
+      summary: Create a unit (manager/board)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnitInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Unit" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /units/{unitID}:
+    get:
+      tags: [Property]
+      summary: Unit detail
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Unit
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Unit" }
+    patch:
+      tags: [Property]
+      summary: Update a unit — status/rooms/area (manager/board)
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [occupied, vacant, under_construction] }
+                area_m2: { type: number }
+                rooms: { type: integer }
+      responses:
+        "200": { description: Updated unit }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /units/{unitID}/parties:
+    get:
+      tags: [Property]
+      summary: Current owner/resident + validity-ranged history
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Parties
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UnitParties" }
+
+  /units/{unitID}/transfer-history:
+    get:
+      tags: [Property]
+      summary: Audited ownership/residency changes
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Transfer records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/TransferRecord" }
+
+  /units/{unitID}/ownership-changes:
+    post:
+      tags: [Property]
+      summary: Record an ownership change (manager)
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PartyChangeInput" }
+      responses:
+        "200": { description: Owner changed (history recorded) }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /units/{unitID}/residency-changes:
+    post:
+      tags: [Property]
+      summary: Record a residency change (manager)
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PartyChangeInput" }
+      responses:
+        "200": { description: Resident changed (history recorded) }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/assets:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Property]
+      summary: List parkings/warehouses (kind required)
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          schema: { type: string, enum: [parking, warehouse] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [available] }
+      responses:
+        "200":
+          description: Assets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Asset" }
+    post:
+      tags: [Property]
+      summary: Create a parking/warehouse (manager)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssetInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+
+  /units/{unitID}/assets:
+    post:
+      tags: [Property]
+      summary: Assign an asset to a unit (same-building rule enforced)
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, code]
+              properties:
+                kind: { type: string, enum: [parking, warehouse] }
+                code: { type: string, example: P-01 }
+      responses:
+        "200":
+          description: Assigned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /units/{unitID}/assets/{assetCode}:
+    delete:
+      tags: [Property]
+      summary: Release an asset from a unit (manager)
+      parameters:
+        - name: unitID
+          in: path
+          required: true
+          schema: { type: string }
+        - name: assetCode
+          in: path
+          required: true
+          schema: { type: string }
+        - name: kind
+          in: query
+          required: true
+          schema: { type: string, enum: [parking, warehouse] }
+      responses:
+        "200": { description: Released }
+
+  /contracts:
+    post:
+      tags: [Property]
+      summary: Draft a contract (purchase/rental/transfer)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContractInput" }
+      responses:
+        "201":
+          description: Draft created (number auto-generated)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contract" }
+
+  /contracts/{contractID}:
+    get:
+      tags: [Property]
+      summary: Contract detail
+      parameters:
+        - name: contractID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Contract
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contract" }
+
+  /contracts/{contractID}/sign:
+    post:
+      tags: [Property]
+      summary: Sign as first or second party (caller must be a party)
+      parameters:
+        - name: contractID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Signed }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /contracts/{contractID}/activate:
+    post:
+      tags: [Property]
+      summary: |
+        Activate a fully-signed draft. Side effects: purchase → ownership
+        transfer, rental → residency transfer; emits contract.activated.
+      parameters:
+        - name: contractID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Activated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contract" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  # ---------------- Billing ----------------
+
+  /buildings/{buildingID}/charge-templates:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    post:
+      tags: [Billing]
+      summary: Define a recurring charge (manager/board)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChargeTemplateInput" }
+      responses:
+        "201": { description: Template created }
+    get:
+      tags: [Billing]
+      summary: List charge templates (members)
+      responses:
+        "200": { description: Templates }
+
+  /buildings/{buildingID}/charges:generate:
+    post:
+      tags: [Billing]
+      summary: Generate charges for a period (idempotent per unit×template×period)
+      parameters:
+        - $ref: "#/components/parameters/BuildingID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [period]
+              properties:
+                period: { type: string, example: "1405-06", description: Jalali YYYY-MM }
+                due_in_days: { type: integer, default: 14 }
+      responses:
+        "200":
+          description: Generation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created: { type: integer }
+                  period: { type: string }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/charges:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Billing]
+      summary: List charges (filterable)
+      parameters:
+        - { name: unit_id, in: query, schema: { type: string } }
+        - { name: period, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ChargeStatus" } }
+      responses:
+        "200":
+          description: Charges
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Charge" }
+
+  /charges/{chargeID}/payments:
+    post:
+      tags: [Billing]
+      summary: Record a payment attempt (creates a pending transaction)
+    parameters:
+      - name: chargeID
+        in: path
+        required: true
+        schema: { type: string }
+    requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, method]
+              properties:
+                amount: { type: integer, format: int64, description: Rial }
+                method: { type: string, enum: [online, cash, bank_transfer, cheque, pos] }
+    responses:
+        "201": { description: Transaction created }
+
+  /transactions/{txID}/confirm:
+    post:
+      tags: [Billing]
+      summary: Confirm a transaction (manager; applies to charge + invoice)
+      parameters:
+        - name: txID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Confirmed }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/invoices:
+    get:
+      tags: [Billing]
+      summary: Per-unit period invoices
+      parameters:
+        - $ref: "#/components/parameters/BuildingID"
+        - { name: unit_id, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Invoices }
+
+  /buildings/{buildingID}/reports/financial:
+    get:
+      tags: [Billing]
+      summary: Collections report for a period (manager/board)
+      parameters:
+        - $ref: "#/components/parameters/BuildingID"
+        - { name: period, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period: { type: string }
+                  units: { type: integer }
+                  total_billed: { type: integer, format: int64 }
+                  total_collected: { type: integer, format: int64 }
+                  outstanding: { type: integer, format: int64 }
+                  overdue_count: { type: integer }
+                  collection_rate: { type: number }
+
+  # ---------------- Notifications ----------------
+
+  /templates:
+    get:
+      tags: [Notifications]
+      summary: List notification templates
+      responses:
+        "200":
+          description: Templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/NotificationTemplate" }
+    post:
+      tags: [Notifications]
+      summary: Create/update a template (per-channel variants)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationTemplate" }
+      responses:
+        "200": { description: Upserted }
+
+  /notifications:send:
+    post:
+      tags: [Notifications]
+      summary: Send a campaign (fan-out to recipients × channels)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [building_id, template, target]
+              properties:
+                building_id: { type: string }
+                template: { type: string, example: charge.overdue.reminder }
+                target: { $ref: "#/components/schemas/NotificationTarget" }
+                vars:
+                  type: object
+                  additionalProperties: { type: string }
+                  example: { period: "1405-06", remaining: "1500000" }
+                channels:
+                  type: array
+                  items: { type: string, enum: [inapp, email, sms, webhook] }
+                schedule_at: { type: string, format: date-time }
+      responses:
+        "201":
+          description: Campaign created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Campaign" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /notifications/{campaignID}:
+    get:
+      tags: [Notifications]
+      summary: Campaign status + per-channel counters + deliveries
+      parameters:
+        - name: campaignID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Campaign detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  campaign: { $ref: "#/components/schemas/Campaign" }
+                  counters:
+                    type: object
+                    properties:
+                      pending: { type: integer }
+                      sent: { type: integer }
+                      failed: { type: integer }
+                  deliveries:
+                    type: array
+                    items: { $ref: "#/components/schemas/Delivery" }
+
+  /me/notifications:
+    get:
+      tags: [Notifications]
+      summary: My inbox
+      parameters:
+        - { name: unread, in: query, schema: { type: boolean } }
+      responses:
+        "200":
+          description: Inbox messages (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/InboxMessage" }
+
+  /me/notifications/{messageID}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark an inbox message read
+      parameters:
+        - name: messageID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Marked read }
+
+  /auth/password-reset:
+    post:
+      tags: [Auth]
+      summary: Request a password-reset email (always 200 — never reveals accounts)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "200": { description: Reset requested if the account exists }
+
+  /auth/password-reset/confirm:
+    post:
+      tags: [Auth]
+      summary: Reset the password with the emailed token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token: { type: string }
+                new_password: { type: string }
+      responses:
+        "200": { description: Password updated }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /charge-templates/{templateID}:
+    patch:
+      tags: [Billing]
+      summary: Update a charge template (manager/board)
+      parameters:
+        - name: templateID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                amount: { type: integer }
+                description: { type: string }
+                is_active: { type: boolean }
+      responses:
+        "200": { description: Updated template }
+        "403": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [Billing]
+      summary: Delete a charge template (manager/board)
+      parameters:
+        - name: templateID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Deleted }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /facilities:
+    post:
+      tags: [Facilities]
+      summary: Define a facility (manager)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FacilityInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Facility" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/facilities:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Facilities]
+      summary: List the building's facilities (members)
+      responses:
+        "200":
+          description: Facilities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Facility" }
+
+  /facilities/{facilityID}:
+    parameters:
+      - name: facilityID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Facilities]
+      summary: Facility detail
+      responses:
+        "200":
+          description: Facility
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Facility" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [Facilities]
+      summary: Update a facility (manager)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FacilityInput" }
+      responses:
+        "200": { description: Updated facility }
+        "403": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [Facilities]
+      summary: Delete a facility (manager)
+      responses:
+        "200": { description: Deleted }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /facilities/{facilityID}/availability:
+    parameters:
+      - name: facilityID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: date
+        in: query
+        schema: { type: string, format: date }
+    get:
+      tags: [Facilities]
+      summary: Free hours for a date (defaults to today)
+      responses:
+        "200":
+          description: Free hours of day
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  free_hours:
+                    type: array
+                    items: { type: integer }
+
+  /facilities/{facilityID}/bookings:
+    post:
+      tags: [Facilities]
+      summary: Book a facility (building members; slot rules enforced)
+      parameters:
+        - name: facilityID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BookingInput" }
+      responses:
+        "201":
+          description: Booking created (pending approval)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /bookings:
+    get:
+      tags: [Facilities]
+      summary: My bookings
+      parameters:
+        - name: mine
+          in: query
+          required: true
+          schema: { type: string, enum: ["true"] }
+      responses:
+        "200":
+          description: Bookings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Booking" }
+
+  /bookings/{bookingID}:
+    get:
+      tags: [Facilities]
+      summary: Booking detail
+      parameters:
+        - name: bookingID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Booking
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /bookings/{bookingID}/approve:
+    post:
+      tags: [Facilities]
+      summary: Approve a pending booking (manager; conflicts rejected)
+      parameters:
+        - name: bookingID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Confirmed booking }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /bookings/{bookingID}/reject:
+    post:
+      tags: [Facilities]
+      summary: Reject a pending booking (manager)
+      parameters:
+        - name: bookingID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Rejected booking }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /bookings/{bookingID}/cancel:
+    post:
+      tags: [Facilities]
+      summary: Cancel a booking (owner or manager)
+      parameters:
+        - name: bookingID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Cancelled booking }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /facilities/{facilityID}/maintenance-windows:
+    post:
+      tags: [Facilities]
+      summary: Schedule maintenance (manager; cancels overlapping bookings)
+      parameters:
+        - name: facilityID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, scheduled_start, scheduled_end]
+              properties:
+                title: { type: string }
+                type: { type: string, enum: [routine, repair, cleaning, inspection, upgrade] }
+                priority: { type: string, enum: [low, medium, high, urgent] }
+                scheduled_start: { type: string, format: date-time }
+                scheduled_end: { type: string, format: date-time }
+                affect_bookings: { type: boolean, default: true }
+      responses:
+        "201": { description: Maintenance window created }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /maintenance-windows/{maintenanceID}/start:
+    post:
+      tags: [Facilities]
+      summary: Start scheduled maintenance (manager)
+      parameters:
+        - name: maintenanceID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Maintenance in progress }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /maintenance-windows/{maintenanceID}/complete:
+    post:
+      tags: [Facilities]
+      summary: Complete maintenance (manager)
+      parameters:
+        - name: maintenanceID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Maintenance done }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/teams:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Operations]
+      summary: List teams (building members)
+      responses:
+        "200":
+          description: Teams
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Team" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [Operations]
+      summary: Create a team (manager/board)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TeamInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /teams/{teamID}:
+    get:
+      tags: [Operations]
+      summary: Team detail
+      parameters:
+        - name: teamID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Team
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /teams/{teamID}/members:
+    post:
+      tags: [Operations]
+      summary: Add a member to a team (manager/board)
+      parameters:
+        - name: teamID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string }
+      responses:
+        "200": { description: Updated team }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /teams/{teamID}/members/{userID}:
+    delete:
+      tags: [Operations]
+      summary: Remove a member from a team (manager/board)
+      parameters:
+        - name: teamID
+          in: path
+          required: true
+          schema: { type: string }
+        - name: userID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Updated team }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /teams/{teamID}/performance:
+    get:
+      tags: [Operations]
+      summary: Team KPIs computed from live tasks (manager/board)
+      parameters:
+        - name: teamID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Performance snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_id: { type: string }
+                  total_tasks: { type: integer }
+                  completed_tasks: { type: integer }
+                  overdue_tasks: { type: integer }
+                  completion_rate: { type: number }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /teams/{teamID}/tasks:
+    post:
+      tags: [Operations]
+      summary: Create a task (manager/board)
+      parameters:
+        - name: teamID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Operations]
+      summary: List tasks (managers see all; staff see their teams')
+      parameters:
+        - name: team_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Task" }
+
+  /tasks/{taskID}:
+    get:
+      tags: [Operations]
+      summary: Task detail
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /tasks/{taskID}/assign:
+    post:
+      tags: [Operations]
+      summary: Assign a task to staff (manager/board)
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [staff_id]
+              properties:
+                staff_id: { type: string }
+      responses:
+        "200": { description: Assigned task }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /tasks/{taskID}/start:
+    post:
+      tags: [Operations]
+      summary: Start a task (assignee or manager)
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Task in progress }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /tasks/{taskID}/complete:
+    post:
+      tags: [Operations]
+      summary: Complete a task (assignee or manager)
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actual_hours: { type: integer }
+      responses:
+        "200": { description: Completed task }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /tasks/{taskID}/hold:
+    post:
+      tags: [Operations]
+      summary: Put a task on hold (manager/board)
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Task on hold }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /tasks/{taskID}/cancel:
+    post:
+      tags: [Operations]
+      summary: Cancel a task (manager/board)
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Cancelled task }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /tasks/{taskID}/comments:
+    get:
+      tags: [Operations]
+      summary: List task comments
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Comments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/TaskComment" }
+    post:
+      tags: [Operations]
+      summary: Comment on a task
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [comment]
+              properties:
+                comment: { type: string }
+      responses:
+        "201": { description: Comment added }
+
+  /buildings/{buildingID}/service-requests:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Operations]
+      summary: List service requests (staff see all; residents their own)
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Requests
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ServiceRequest" }
+    post:
+      tags: [Operations]
+      summary: Submit a service request (any building member)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceRequestInput" }
+      responses:
+        "201":
+          description: Submitted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceRequest" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /service-requests/{requestID}:
+    get:
+      tags: [Operations]
+      summary: Service request detail (staff or submitter)
+      parameters:
+        - name: requestID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceRequest" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /service-requests/{requestID}/assign:
+    post:
+      tags: [Operations]
+      summary: Triage to a team — creates the linked task (manager/board)
+      parameters:
+        - name: requestID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [team_id]
+              properties:
+                team_id: { type: string }
+      responses:
+        "200": { description: Assigned request with related_task set }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/announcements:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Comms]
+      summary: List announcements (members see published; managers see drafts too)
+      responses:
+        "200":
+          description: Announcements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Announcement" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [Comms]
+      summary: Draft an announcement (manager/board)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnnouncementInput" }
+      responses:
+        "201":
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Announcement" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /announcements/{announcementID}:
+    parameters:
+      - name: announcementID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Comms]
+      summary: Announcement detail
+      responses:
+        "200":
+          description: Announcement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Announcement" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [Comms]
+      summary: Edit a draft announcement (manager/board; published ones immutable)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnnouncementInput" }
+      responses:
+        "200": { description: Updated }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [Comms]
+      summary: Delete an announcement (manager/board)
+      responses:
+        "200": { description: Deleted }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /announcements/{announcementID}/publish:
+    post:
+      tags: [Comms]
+      summary: Publish and fan out to the targeted audience's in-app inbox
+      parameters:
+        - name: announcementID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Published (delivered_to counts inbox recipients)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Announcement" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/meetings:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Comms]
+      summary: List meetings (staff see all; members see general/emergency)
+      responses:
+        "200":
+          description: Meetings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Meeting" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [Comms]
+      summary: Schedule a meeting (manager/board)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MeetingInput" }
+      responses:
+        "201":
+          description: Scheduled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Meeting" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /meetings/{meetingID}:
+    parameters:
+      - name: meetingID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Comms]
+      summary: Meeting detail
+      responses:
+        "200":
+          description: Meeting
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Meeting" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [Comms]
+      summary: Update a meeting (manager/board; status transitions live here)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                agenda: { type: string }
+                location: { type: string }
+                status: { type: string, enum: [scheduled, ongoing, completed, cancelled] }
+      responses:
+        "200": { description: Updated }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /meetings/{meetingID}/rsvp:
+    post:
+      tags: [Comms]
+      summary: RSVP (any building member; upserts the latest status)
+      parameters:
+        - name: meetingID
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [confirmed, declined, attended, absent] }
+      responses:
+        "200":
+          description: Attendance recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Attendance" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /meetings/{meetingID}/attendance:
+    get:
+      tags: [Comms]
+      summary: Attendance roster (manager/board)
+      parameters:
+        - name: meetingID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Attendance rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Attendance" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /meetings/{meetingID}/minutes:
+    parameters:
+      - name: meetingID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Comms]
+      summary: Read the minutes
+      responses:
+        "200":
+          description: Minutes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Minute" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [Comms]
+      summary: Write/update the minutes (manager/board)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Minute" }
+      responses:
+        "200": { description: Saved }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /meetings/{meetingID}/minutes/sign:
+    post:
+      tags: [Comms]
+      summary: Sign the minutes as the current user (idempotent)
+      parameters:
+        - name: meetingID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Signed minutes }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /buildings/{buildingID}/tickets:
+    parameters:
+      - $ref: "#/components/parameters/BuildingID"
+    get:
+      tags: [Comms]
+      summary: List support tickets (staff see all; residents their own)
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Tickets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Ticket" }
+    post:
+      tags: [Comms]
+      summary: Open a support ticket (any building member)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TicketInput" }
+      responses:
+        "201":
+          description: Ticket opened
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ticket" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /tickets/{ticketID}:
+    get:
+      tags: [Comms]
+      summary: Ticket detail with thread (staff or submitter)
+      parameters:
+        - name: ticketID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Ticket + responses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket: { $ref: "#/components/schemas/Ticket" }
+                  responses:
+                    type: array
+                    items: { $ref: "#/components/schemas/TicketResponse" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /tickets/{ticketID}/responses:
+    parameters:
+      - name: ticketID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Comms]
+      summary: List thread replies
+      responses:
+        "200":
+          description: Replies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/TicketResponse" }
+    post:
+      tags: [Comms]
+      summary: Reply on a ticket (staff reply triages an open ticket)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                internal: { type: boolean }
+      responses:
+        "201": { description: Reply added }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /tickets/{ticketID}/resolve:
+    post:
+      tags: [Comms]
+      summary: Resolve a ticket (staff)
+      parameters:
+        - name: ticketID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Resolved }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /tickets/{ticketID}/close:
+    post:
+      tags: [Comms]
+      summary: Close a ticket (staff)
+      parameters:
+        - name: ticketID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Closed }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    BuildingID:
+      name: buildingID
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: Error (RFC 9457)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 problem details with machine-readable code
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string, example: UNIT_NOT_IN_BUILDING }
+        detail: { type: string }
+        trace_id: { type: string }
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password:
+          type: string
+          description: "≥8 chars with a letter and a digit"
+        full_name: { type: string }
+        phone: { type: string }
+        role:
+          type: string
+          enum: [manager, staff, owner, resident, board_member]
+          default: resident
+
+    TokenPair:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        token_type: { type: string, example: Bearer }
+        expires_in: { type: integer, example: 900 }
+
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        full_name: { type: string }
+        phone: { type: string }
+        national_code: { type: string }
+        platform_role: { type: string }
+        email_verified: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    Membership:
+      type: object
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        building_id: { type: string }
+        role: { type: string, enum: [manager, board_member, staff, owner, resident] }
+        from: { type: string, format: date-time }
+
+    BuildingInput:
+      type: object
+      required: [name, code, type, address]
+      properties:
+        name: { type: string }
+        code: { type: string, example: TWR-1 }
+        type: { type: string, enum: [residential, commercial, office, mixed] }
+        address: { type: string }
+        floors: { type: integer }
+        features:
+          type: array
+          items: { type: string }
+
+    Building:
+      allOf:
+        - $ref: "#/components/schemas/BuildingInput"
+        - type: object
+          properties:
+            id: { type: string }
+            created_by: { type: string }
+            created_at: { type: string, format: date-time }
+
+    UnitInput:
+      type: object
+      required: [floor, number]
+      properties:
+        floor: { type: integer }
+        number: { type: string, example: "301" }
+        area_m2: { type: number }
+        rooms: { type: integer }
+
+    Unit:
+      allOf:
+        - $ref: "#/components/schemas/UnitInput"
+        - type: object
+          properties:
+            id: { type: string }
+            building_id: { type: string }
+            status: { type: string, enum: [occupied, vacant, under_construction] }
+            created_at: { type: string, format: date-time }
+
+    UnitParties:
+      type: object
+      properties:
+        current:
+          type: object
+          properties:
+            owner: { $ref: "#/components/schemas/Party" }
+            resident: { $ref: "#/components/schemas/Party" }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/Party" }
+
+    Party:
+      type: object
+      properties:
+        user_id: { type: string }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time, nullable: true }
+
+    PartyChangeInput:
+      type: object
+      required: [new_user_id]
+      properties:
+        new_user_id: { type: string }
+        effective_date: { type: string, format: date, example: "2026-09-01" }
+        contract_number: { type: string }
+        description: { type: string }
+
+    TransferRecord:
+      type: object
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [owner, resident] }
+        previous_user_id: { type: string }
+        new_user_id: { type: string }
+        effective_date: { type: string, format: date }
+        contract_number: { type: string }
+        recorded_by: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+
+    AssetInput:
+      type: object
+      required: [kind, code]
+      properties:
+        kind: { type: string, enum: [parking, warehouse] }
+        code: { type: string, example: P-01 }
+        floor: { type: integer }
+        area_m2: { type: number }
+
+    Asset:
+      allOf:
+        - $ref: "#/components/schemas/AssetInput"
+        - type: object
+          properties:
+            id: { type: string }
+            building_id: { type: string }
+            unit_id: { type: string, nullable: true }
+            available: { type: boolean }
+
+    ContractInput:
+      type: object
+      required: [type, unit_id, first_party_id, second_party_id, amount]
+      properties:
+        type: { type: string, enum: [purchase, rental, transfer] }
+        unit_id: { type: string }
+        first_party_id: { type: string }
+        second_party_id: { type: string }
+        title: { type: string }
+        amount: { type: integer, format: int64, description: Rial }
+        deposit_amount: { type: integer, format: int64 }
+        start_date: { type: string, format: date }
+        duration_months: { type: integer }
+
+    Contract:
+      allOf:
+        - $ref: "#/components/schemas/ContractInput"
+        - type: object
+          properties:
+            id: { type: string }
+            number: { type: string, example: CONTRACT-20260823-0001 }
+            status: { type: string, enum: [draft, active, expired, cancelled] }
+            first_signed: { type: boolean }
+            second_signed: { type: boolean }
+            signed_date: { type: string, format: date, nullable: true }
+
+    ChargeStatus:
+      type: string
+      enum: [pending, paid, partially_paid, overdue, cancelled]
+
+    ChargeTemplateInput:
+      type: object
+      required: [name, amount]
+      properties:
+        name: { type: string, example: شارژ ماهانه }
+        type:
+          type: string
+          enum: [monthly, maintenance, elevator, cleaning, security, green_space, pool, gym, other]
+        amount: { type: integer, format: int64, description: Rial }
+        description: { type: string }
+
+    Charge:
+      type: object
+      properties:
+        id: { type: string }
+        unit_id: { type: string }
+        template_id: { type: string }
+        period: { type: string, example: "1405-06" }
+        amount: { type: integer, format: int64 }
+        paid: { type: integer, format: int64 }
+        remaining: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/ChargeStatus" }
+        due_date: { type: string, format: date }
+
+    NotificationTemplate:
+      type: object
+      required: [name, variants]
+      properties:
+        name: { type: string, example: charge.overdue.reminder }
+        severity: { type: string, enum: [normal, urgent] }
+        channels:
+          type: array
+          items: { type: string, enum: [inapp, email, sms, webhook] }
+        variants:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              title: { type: string }
+              body: { type: string, description: "Supports {{var}} placeholders" }
+
+    NotificationTarget:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [all, role, users, units] }
+        values:
+          type: array
+          items: { type: string }
+          description: "role names / user ids / unit ids (per kind)"
+
+    Campaign:
+      type: object
+      properties:
+        id: { type: string }
+        building_id: { type: string }
+        template: { type: string }
+        target: { $ref: "#/components/schemas/NotificationTarget" }
+        vars:
+          type: object
+          additionalProperties: { type: string }
+        channels:
+          type: array
+          items: { type: string }
+        severity: { type: string, enum: [normal, urgent] }
+        schedule_at: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [scheduled, sending, done] }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Delivery:
+      type: object
+      properties:
+        id: { type: string }
+        campaign_id: { type: string }
+        recipient_id: { type: string }
+        channel: { type: string }
+        to: { type: string }
+        title: { type: string }
+        body: { type: string }
+        status: { type: string, enum: [pending, sent, failed] }
+        attempts: { type: integer }
+        next_retry_at: { type: string, format: date-time }
+        provider_ref: { type: string }
+        last_error: { type: string }
+        sent_at: { type: string, format: date-time, nullable: true }
+
+    InboxMessage:
+      type: object
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        read: { type: boolean }
+        campaign_id: { type: string }
+        created_at: { type: string, format: date-time }
+    FacilityInput:
+      type: object
+      required: [building_id, name, capacity]
+      properties:
+        building_id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [pool, gym, roof_garden, meeting_room, party_hall, guest_parking, playground, sports_court, library, business_center, other] }
+        description: { type: string }
+        capacity: { type: integer, minimum: 1 }
+        opening_time: { type: string, example: "08:00" }
+        closing_time: { type: string, example: "22:00" }
+        hourly_rate: { type: integer, description: Rials per hour (0 = free) }
+        min_advance_hours: { type: integer, default: 1 }
+        max_advance_hours: { type: integer, default: 168 }
+        rules: { type: array, items: { type: string } }
+        images: { type: array, items: { type: string } }
+
+    Facility:
+      allOf:
+        - $ref: "#/components/schemas/FacilityInput"
+        - type: object
+          properties:
+            id: { type: string }
+            is_active: { type: boolean }
+            created_at: { type: string, format: date-time }
+
+    BookingInput:
+      type: object
+      required: [start, end]
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        purpose: { type: string }
+        participants: { type: integer, minimum: 1 }
+
+    Booking:
+      type: object
+      properties:
+        id: { type: string }
+        facility_id: { type: string }
+        building_id: { type: string }
+        user_id: { type: string }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        purpose: { type: string }
+        participants: { type: integer }
+        status: { type: string, enum: [pending, confirmed, completed, cancelled, rejected] }
+        total_cost: { type: integer }
+        approved_by: { type: string }
+        created_at: { type: string, format: date-time }
+
+    TeamInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [security, maintenance, cleaning, landscaping, pool, gym, other] }
+        description: { type: string }
+        supervisor: { type: string }
+
+    Team:
+      allOf:
+        - $ref: "#/components/schemas/TeamInput"
+        - type: object
+          properties:
+            id: { type: string }
+            building_id: { type: string }
+            members: { type: array, items: { type: string } }
+            is_active: { type: boolean }
+            created_at: { type: string, format: date-time }
+
+    TaskInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        priority: { type: string, enum: [low, medium, high, urgent], default: medium }
+        due_date: { type: string, format: date-time }
+        estimated_hours: { type: integer }
+        related_unit: { type: string }
+
+    Task:
+      allOf:
+        - $ref: "#/components/schemas/TaskInput"
+        - type: object
+          properties:
+            id: { type: string }
+            team_id: { type: string }
+            building_id: { type: string }
+            assigned_to: { type: string }
+            status: { type: string, enum: [pending, assigned, in_progress, completed, cancelled, on_hold] }
+            actual_hours: { type: integer }
+            assigned_at: { type: string, format: date-time }
+            started_at: { type: string, format: date-time }
+            completed_at: { type: string, format: date-time }
+            created_at: { type: string, format: date-time }
+
+    TaskComment:
+      type: object
+      properties:
+        id: { type: string }
+        task_id: { type: string }
+        author: { type: string }
+        comment: { type: string }
+        created_at: { type: string, format: date-time }
+
+    ServiceRequestInput:
+      type: object
+      required: [unit_id, title]
+      properties:
+        unit_id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        type: { type: string, enum: [maintenance, cleaning, security, complaint, suggestion, other], default: maintenance }
+        priority: { type: string, enum: [low, medium, high, urgent], default: medium }
+
+    ServiceRequest:
+      allOf:
+        - $ref: "#/components/schemas/ServiceRequestInput"
+        - type: object
+          properties:
+            id: { type: string }
+            building_id: { type: string }
+            submitted_by: { type: string }
+            status: { type: string, enum: [submitted, under_review, assigned, in_progress, completed, cancelled] }
+            assigned_team: { type: string }
+            related_task: { type: string }
+            submitted_at: { type: string, format: date-time }
+            completed_at: { type: string, format: date-time }
+
+    AnnouncementInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        content: { type: string }
+        priority: { type: string, enum: [low, normal, high, urgent], default: normal }
+        target: { $ref: "#/components/schemas/NotificationTarget" }
+        expires_at: { type: string, format: date-time }
+
+    Announcement:
+      allOf:
+        - $ref: "#/components/schemas/AnnouncementInput"
+        - type: object
+          properties:
+            id: { type: string }
+            building_id: { type: string }
+            status: { type: string, enum: [draft, published] }
+            publish_at: { type: string, format: date-time }
+            delivered_to: { type: integer }
+            created_by: { type: string }
+            created_at: { type: string, format: date-time }
+
+    MeetingInput:
+      type: object
+      required: [title, scheduled_at]
+      properties:
+        title: { type: string }
+        type: { type: string, enum: [board, general, committee, emergency], default: general }
+        description: { type: string }
+        agenda: { type: string }
+        scheduled_at: { type: string, format: date-time }
+        location: { type: string }
+        duration_min: { type: integer, default: 60 }
+        target: { $ref: "#/components/schemas/NotificationTarget" }
+
+    Meeting:
+      allOf:
+        - $ref: "#/components/schemas/MeetingInput"
+        - type: object
+          properties:
+            id: { type: string }
+            building_id: { type: string }
+            status: { type: string, enum: [scheduled, ongoing, completed, cancelled] }
+            created_by: { type: string }
+            created_at: { type: string, format: date-time }
+
+    Attendance:
+      type: object
+      properties:
+        id: { type: string }
+        meeting_id: { type: string }
+        user_id: { type: string }
+        status: { type: string, enum: [invited, confirmed, declined, attended, absent] }
+        responded_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    Minute:
+      type: object
+      required: [content]
+      properties:
+        id: { type: string }
+        meeting_id: { type: string }
+        content: { type: string }
+        decisions: { type: string }
+        action_items: { type: string }
+        signed_by: { type: array, items: { type: string } }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TicketInput:
+      type: object
+      required: [unit_id, title]
+      properties:
+        unit_id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        type: { type: string, enum: [technical, financial, complaint, suggestion, general], default: general }
+        priority: { type: string, enum: [low, medium, high, urgent], default: medium }
+
+    Ticket:
+      allOf:
+        - $ref: "#/components/schemas/TicketInput"
+        - type: object
+          properties:
+            id: { type: string }
+            building_id: { type: string }
+            submitted_by: { type: string }
+            status: { type: string, enum: [open, in_progress, resolved, closed] }
+            assigned_to: { type: string }
+            team_id: { type: string }
+            submitted_at: { type: string, format: date-time }
+            resolved_at: { type: string, format: date-time }
+            closed_at: { type: string, format: date-time }
+
+    TicketResponse:
+      type: object
+      properties:
+        id: { type: string }
+        ticket_id: { type: string }
+        author: { type: string }
+        message: { type: string }
+        internal: { type: boolean }
+        created_at: { type: string, format: date-time }

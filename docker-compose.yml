@@ -1,0 +1,186 @@
+# Unital — full stack (frontend + gateway + 6 Go services).
+#
+# Host ports avoid this machine's MinIO (which owns 8080/9001):
+#
+#   frontend      http://localhost:18000   (resident app; /api proxied to gateway)
+#   gateway       http://localhost:18080   (API entrypoint; Swagger at /api/docs)
+#   identity      http://localhost:19001
+#   property      http://localhost:19002
+#   billing       http://localhost:19003
+#   facilities    http://localhost:19004
+#   operations    http://localhost:19005
+#   notifications http://localhost:19006
+#
+# Persistence: each Go service uses PostgreSQL when DB_URL is set
+# (the postgres service below), and falls back to in-memory otherwise.
+# DEV switches make the fresh stack usable out of the box:
+# DEV_AUTOVERIFY logs in new registrations without email,
+# DEV_TRUST_ALL relaxes per-building RBAC — dev/demo only.
+
+x-go-build: &go-build
+  context: ./backend
+  dockerfile: deploy/Dockerfile
+
+x-go-common: &go-common
+  restart: unless-stopped
+  environment: &go-env
+    JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    DEV_TRUST_ALL: "1"
+    INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal-token}
+    DB_URL: postgres://unital:unital@postgres:5432/unital?sslmode=disable
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: unital
+      POSTGRES_PASSWORD: unital
+      POSTGRES_DB: unital
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/migrations/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    ports: ["15432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U unital -d unital"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build: ./frontend
+    ports: ["18000:80"]
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  gateway:
+    build:
+      <<: *go-build
+      args: { CMD: gateway }
+    ports: ["18080:8080"]
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-dev-internal-token}
+      IDENTITY_URL: http://identity:9001
+      PROPERTY_URL: http://property:9002
+      BILLING_URL: http://billing:9003
+      FACILITIES_URL: http://facilities:9004
+      OPERATIONS_URL: http://operations:9005
+      NOTIFICATIONS_URL: http://notifications:9006
+    depends_on:
+      identity: { condition: service_healthy }
+      property: { condition: service_healthy }
+      billing: { condition: service_healthy }
+      facilities: { condition: service_healthy }
+      operations: { condition: service_healthy }
+      notifications: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  identity:
+    build:
+      <<: *go-build
+      args: { CMD: services/identity/cmd/server }
+    <<: *go-common
+    ports: ["19001:9001"]
+    environment:
+      <<: *go-env
+      DEV_AUTOVERIFY: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9001/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  property:
+    build:
+      <<: *go-build
+      args: { CMD: services/property/cmd/server }
+    <<: *go-common
+    ports: ["19002:9002"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9002/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  billing:
+    build:
+      <<: *go-build
+      args: { CMD: services/billing/cmd/server }
+    <<: *go-common
+    ports: ["19003:9003"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9003/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  facilities:
+    build:
+      <<: *go-build
+      args: { CMD: services/facilities/cmd/server }
+    <<: *go-common
+    ports: ["19004:9004"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9004/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  operations:
+    build:
+      <<: *go-build
+      args: { CMD: services/operations/cmd/server }
+    <<: *go-common
+    ports: ["19005:9005"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9005/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  notifications:
+    build:
+      <<: *go-build
+      args: { CMD: services/notifications/cmd/server }
+    <<: *go-common
+    ports: ["19006:9006"]
+    environment:
+      <<: *go-env
+      DB_URL: postgres://unital:unital@postgres:5432/unital?sslmode=disable
+      # providers degrade to log adapters when unset:
+      # SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM
+      # SMS_PROVIDER=kavenegar + KAVENEGAR_API_KEY + SMS_SENDER
+      # WEBHOOK_URL + WEBHOOK_SECRET
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9006/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
